@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/white" />
+
+    <TextView
+        android:id="@+id/text_view_45_degrees"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="30 Degrees"
+        android:textSize="15dp"
+        android:textStyle="bold"
+        android:layout_marginTop="16dp"
+        android:layout_centerHorizontal="true"/>
+
+    <FrameLayout
+        android:id="@+id/camera_preview_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_above="@id/controls_layout"
+        android:layout_marginTop="50dp"> <!-- Reduce top margin to 50dp -->
+
+        <!-- Camera Preview -->
+        <TextureView
+            android:id="@+id/camera_preview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+
+        <View
+            android:id="@+id/horizontal_line"
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:background="@android:color/holo_red_dark"
+            android:layout_marginTop="210dp"
+            android:visibility="invisible" />
+
+        <!-- Vertical Line, adjust width as necessary -->
+        <View
+            android:id="@+id/vertical_line"
+            android:layout_width="2dp"
+            android:layout_height="match_parent"
+            android:background="@android:color/holo_red_dark"
+            android:layout_gravity="center_horizontal"
+            android:visibility="invisible" />
+
+
+
+        <!-- Image Overlay -->
+        <ImageView
+            android:id="@+id/face_frame_overlay"
+            android:layout_width="340dp"
+            android:layout_height="340dp"
+            android:layout_gravity="center"
+            android:src="@drawable/face_overlay"
+            android:scaleType="fitCenter"
+            android:visibility="visible" />
+
+    </FrameLayout>
+
+    <!-- Controls Layout -->
+    <LinearLayout
+        android:id="@+id/controls_layout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_alignParentBottom="true">
+
+        <!-- Start Recording Button -->
+        <Button
+            android:id="@+id/startRecordingButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/start_recording"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Switch Camera Button -->
+        <Button
+            android:id="@+id/switchCameraButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            android:text="@string/switch_camera"
+            android:layout_gravity="center_horizontal" />
+
+        <Button
+            android:id="@+id/removeFaceOutlineButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:text="@string/hide_face"
+            android:layout_gravity="center_horizontal" />
+    </LinearLayout>
+
+</RelativeLayout>
