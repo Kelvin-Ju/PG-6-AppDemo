@@ -31,7 +31,23 @@ public class FirstFragment extends Fragment {
         String[] items = new String[]{"Item 1", "Item 2", "Item 3", "Item 4"};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_list_item_1, items);
         listView.setAdapter(adapter);
+
+        listView.setOnItemClickListener((parent, itemView, position, id) -> {
+            SecondFragment secondFragment = new SecondFragment();
+            // Optionally, pass arguments to the second fragment
+            Bundle args = new Bundle();
+            args.putString("someKey", "someValue");
+            secondFragment.setArguments(args);
+
+            getActivity().getSupportFragmentManager().beginTransaction()
+                    .replace(R.id.main_fragment_container, secondFragment)
+                    .addToBackStack(null) // Optional, for navigation back to the previous fragment
+                    .commit();
+        });
+
     }
+
+
 
 
 

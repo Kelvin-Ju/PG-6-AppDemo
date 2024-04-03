@@ -92,7 +92,7 @@ public class ButtonFragment extends Fragment {
 
         // Start CameraFragment with subject ID
         getActivity().getSupportFragmentManager().beginTransaction()
-                .replace(R.id.fragment_container, cameraFragment)
+                .replace(R.id.main_fragment_container, cameraFragment)
                 .addToBackStack(null)
                 .commit();
     }
@@ -103,7 +103,7 @@ public class ButtonFragment extends Fragment {
         args.putString("SUBJECT_ID", subjectID);
         cameraFragment45.setArguments(args);
         requireActivity().getSupportFragmentManager().beginTransaction()
-                .replace(R.id.fragment_container, cameraFragment45)
+                .replace(R.id.main_fragment_container, cameraFragment45)
                 .addToBackStack(null)
                 .commit();
     }
@@ -115,7 +115,7 @@ public class ButtonFragment extends Fragment {
         args.putString("SUBJECT_ID", subjectID);
         cameraDiagonalsFragment.setArguments(args);
         requireActivity().getSupportFragmentManager().beginTransaction()
-                .replace(R.id.fragment_container, cameraDiagonalsFragment)
+                .replace(R.id.main_fragment_container, cameraDiagonalsFragment)
                 .addToBackStack(null)
                 .commit();
     }
