@@ -20,6 +20,8 @@ import android.content.DialogInterface;
 import android.widget.EditText;
 import android.text.InputType;
 
+import java.net.URL;
+
 
 public class MainActivity extends AppCompatActivity {
 
@@ -30,6 +32,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        URL.setURLStreamHandlerFactory(new AndroidURLStreamHandlerFactory());
+
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
