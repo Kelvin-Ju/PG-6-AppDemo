@@ -10,6 +10,8 @@ public class AndroidURLStreamHandlerFactory implements URLStreamHandlerFactory {
     public URLStreamHandler createURLStreamHandler(String protocol) {
         if ("android".equals(protocol)) {
             return new Handler();  // Use Handler directly if there are no naming conflicts
+        } else if ("content".equals(protocol)){
+            return new org.andresoviedo.util.android.content.Handler();
         }
         return null;
     }
