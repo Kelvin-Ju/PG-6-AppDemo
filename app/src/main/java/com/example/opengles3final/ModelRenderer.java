@@ -152,6 +152,7 @@ public class ModelRenderer implements GLSurfaceView.Renderer {
     private boolean colorsEnabled = true;
     private boolean animationEnabled = true;
 
+
     // skybox
 
     private Quaternion orientation = new Quaternion(0,0,0,1);
@@ -314,12 +315,14 @@ public class ModelRenderer implements GLSurfaceView.Renderer {
         // log event
         Log.d(TAG, "onSurfaceCreated. config: " + config);
 
+        Log.d(TAG, "Background Color: Red=" + backgroundColor[0] + ", Green=" + backgroundColor[1] + ", Blue=" + backgroundColor[2] + ", Alpha=" + backgroundColor[3]);
+
         // Set the background frame color
         GLES20.glClearColor(backgroundColor[0], backgroundColor[1], backgroundColor[2], backgroundColor[3]);
 
         // Use culling to remove back faces.
         // Don't remove back faces so we can see them
-        // GLES20.glEnable(GLES20.GL_CULL_FACE);
+        GLES20.glEnable(GLES20.GL_CULL_FACE);
 
         // Enable depth testing for hidden-surface elimination.
         GLES20.glEnable(GLES20.GL_DEPTH_TEST);
@@ -331,6 +334,7 @@ public class ModelRenderer implements GLSurfaceView.Renderer {
 
         // init variables having android context
         ContentUtils.setThreadActivity(main.getContext());
+        scene.init();
 
 
     }
@@ -386,11 +390,12 @@ public class ModelRenderer implements GLSurfaceView.Renderer {
                 GLES20.glDisable(GLES20.GL_BLEND);
             }
 
+
             // refresh matrices
             refreshMatrices();
 
             // animate scene
-            scene.onDrawFrame();
+            //scene.onDrawFrame();
 
             // recalculate mvp matrix according to where we are looking at now
             Camera camera = scene.getCamera();

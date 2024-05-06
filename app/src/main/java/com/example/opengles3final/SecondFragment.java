@@ -13,7 +13,7 @@ import android.view.ViewGroup;
 import androidx.annotation.NonNull;
 import androidx.fragment.app.Fragment;
 
-import org.andresoviedo.android_3d_model_engine.camera.CameraController;
+//import org.andresoviedo.android_3d_model_engine.camera.CameraController;
 import org.andresoviedo.android_3d_model_engine.controller.TouchController;
 import org.andresoviedo.android_3d_model_engine.model.Camera;
 import org.andresoviedo.android_3d_model_engine.model.Constants;
@@ -106,7 +106,9 @@ public class SecondFragment extends Fragment {
     private void loadModel() {
         //URI modelUri = URI.create("android://com.example.opengles3final/assets/models/007_30D_F_0_hrn_mid_mesh.obj");
         //URI modelUri = URI.create("android://com.example.opengles3final/assets/models/penguin.obj");
-        URI modelUri = URI.create("android://com.example.opengles3final/assets/models/006_30D_F_0_hrn_mid_mesh.obj");
+        //URI modelUri = URI.create("android://com.example.opengles3final/assets/models/006_30D_F_0_hrn_mid_mesh.obj");
+        URI modelUri = URI.create("android://com.example.opengles3final/assets/models/013_30D_F_0_hrn_mid_mesh.obj");
+
 
 
         Log.d("SecondFragment", "Model URI: " + modelUri.toString()); // Check if the URI looks correct
@@ -135,7 +137,7 @@ public class SecondFragment extends Fragment {
                 data.setLocation(new float[]{0, -0.25f, 0});
                 scene.addObject(data);
                 loadMaterials(data.getMeshData());
-                stopAnimationIfNeeded();
+                //stopAnimationIfNeeded();
 
             }
 
@@ -163,13 +165,16 @@ public class SecondFragment extends Fragment {
     private void setupSceneEnvironment() {
         // Ensure static lighting
         if (scene.isRotatingLight()) {
-            scene.toggleLighting();  // This assumes one toggle switches from rotating to static
-        }
-        if (!scene.isDrawLighting()) {
-            scene.toggleLighting();  // Ensures lighting is turned on if it was off
+            Log.i("WavefrontLoader", "lolz1");
+
+            scene.toggleLighting();  // Toggle once to switch from rotating to static
+            scene.toggleLighting();  // Toggle again to revert, or further modify state
+            //scene.toggleLighting();  // Toggle again to revert, or further modify state
+
         }
 
     }
+
 
 
     private void loadMaterials(MeshData meshData) {
