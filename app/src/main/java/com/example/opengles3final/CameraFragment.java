@@ -46,6 +46,7 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.RelativeLayout;
@@ -134,6 +135,8 @@ public class CameraFragment extends Fragment implements SensorEventListener {
         }
 
         Log.d(TAG, "Subject ID: " + subjectID);
+
+
 
 
 
@@ -1283,6 +1286,9 @@ public class CameraFragment extends Fragment implements SensorEventListener {
         closeCamera();
         stopBackgroundThread();
         super.onPause();
+        WindowManager.LayoutParams layoutParams = getActivity().getWindow().getAttributes();
+        layoutParams.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        getActivity().getWindow().setAttributes(layoutParams);
     }
 
     private void closeCamera() {
@@ -1356,6 +1362,13 @@ public class CameraFragment extends Fragment implements SensorEventListener {
     @Override
     public void onResume() {
         super.onResume();
+        Activity activity = getActivity();
+        if (activity != null) {
+            WindowManager.LayoutParams layoutParams = activity.getWindow().getAttributes();
+            layoutParams.screenBrightness = 1.0f; // 1.0 for maximum brightness
+            activity.getWindow().setAttributes(layoutParams);
+        }
+
         startBackgroundThread();
         sensorManager = (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
         gyroscopeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);

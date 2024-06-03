@@ -27,29 +27,53 @@ public class FirstFragment extends Fragment {
         super.onViewCreated(view, savedInstanceState);
 
         // Assuming your FragmentFirstBinding has a ListView with the ID listview
-        ListView listView = binding.listview; // Direct access via binding if available
-        String[] items = new String[]{"Item 1", "Item 2", "Item 3", "Item 4"};
+        ListView listView = binding.listview;
+        String[] items = new String[]{"Wrinkle+Scar", "Wrinkle+Scar+NoEyeMask", "Wrinkle", "Acne", "Clear", "Model 5"};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_list_item_1, items);
         listView.setAdapter(adapter);
 
+        // Set up the click listener for the ListView items to open the Options fragment with different models
         listView.setOnItemClickListener((parent, itemView, position, id) -> {
-            SecondFragment secondFragment = new SecondFragment();
-            // Optionally, pass arguments to the second fragment
-            Bundle args = new Bundle();
-            args.putString("someKey", "someValue");
-            secondFragment.setArguments(args);
-
-            getActivity().getSupportFragmentManager().beginTransaction()
-                    .replace(R.id.main_fragment_container, secondFragment)
-                    .addToBackStack(null) // Optional, for navigation back to the previous fragment
-                    .commit();
+            openOptionsFragment(position);
         });
-
     }
 
+    private void openOptionsFragment(int modelIndex) {
+        String modelUri;
+        switch (modelIndex) {
+            case 0:
+                modelUri = "android://com.example.opengles3final/assets/models/003F_0_hrn_mid_mesh.obj";
+                break;
+            case 1:
+                modelUri = "android://com.example.opengles3final/assets/models/003F_0_hrn_mid_meshF.obj";
+                break;
+            case 2:
+                modelUri = "android://com.example.opengles3final/assets/models/004F_0_hrn_mid_mesh.obj";
+                break;
+            case 3:
+                modelUri = "android://com.example.opengles3final/assets/models/013_30D_F_0_hrn_mid_mesh.obj";
+                break;
+            case 4:
+                modelUri = "android://com.example.opengles3final/assets/models/007_30D_F_0_hrn_mid_mesh.obj";
+                break;
+            case 5:
+                modelUri = "android://com.example.opengles3final/assets/models/006_30D_F_0_hrn_mid_mesh.obj";
+                break;
+            default:
+                modelUri = "android://com.example.opengles3final/assets/models/default.obj";
+                break;
+        }
 
+        Options optionsFragment = Options.newInstance(modelUri);
 
-
+        // Use the FragmentManager to replace the current fragment with the Options fragment
+        if (getActivity() != null) {
+            getActivity().getSupportFragmentManager().beginTransaction()
+                    .replace(R.id.main_fragment_container, optionsFragment)
+                    .addToBackStack(null) // Optional, for navigation back to the previous fragment
+                    .commit();
+        }
+    }
 
     @Override
     public void onDestroyView() {
