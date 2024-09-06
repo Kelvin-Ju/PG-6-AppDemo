@@ -45,6 +45,7 @@ dependencies {
 
 
     implementation 'com.google.mlkit:face-detection:16.0.2'
+    implementation 'com.jcraft:jsch:0.1.55'
 
 
 }

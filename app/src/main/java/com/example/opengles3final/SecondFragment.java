@@ -4,11 +4,13 @@ import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+
 import androidx.annotation.NonNull;
 import androidx.fragment.app.Fragment;
 
@@ -24,30 +26,58 @@ import org.andresoviedo.android_3d_model_engine.services.LoadListener;
 import org.andresoviedo.android_3d_model_engine.services.SceneLoader;
 import org.andresoviedo.android_3d_model_engine.services.collada.entities.MeshData;
 import org.andresoviedo.android_3d_model_engine.services.wavefront.WavefrontLoaderTask;
-import org.andresoviedo.util.android.ContentUtils;
+//import org.andresoviedo.util.android.ContentUtils;
 
+import com.jcraft.jsch.ChannelSftp;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
+import com.jcraft.jsch.SftpException;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class SecondFragment extends Fragment {
 
-    private static final String ARG_MODEL_URI = "model_uri";
+    private static final String ARG_SUBJECT_ID = "subject_id";
+    private static final String SERVER_HOST = ServerConfig.SERVER_HOST;
+    private static final int SERVER_PORT = ServerConfig.SERVER_PORT;
+    private static final String SERVER_USERNAME = ServerConfig.SERVER_USERNAME;
+    private static final String SERVER_PASSWORD = ServerConfig.SERVER_PASSWORD;
 
     private ModelSurfaceView glView;
     private SceneLoader scene;
     private TouchController touchController;
     private CameraController cameraController;
+    private String subjectId;
 
-    public static SecondFragment newInstance(String modelUri) {
+    public static SecondFragment newInstance(String subjectId) {
         SecondFragment fragment = new SecondFragment();
         Bundle args = new Bundle();
-        args.putString(ARG_MODEL_URI, modelUri);
+        args.putString(ARG_SUBJECT_ID, subjectId);
         fragment.setArguments(args);
         return fragment;
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (getArguments() != null) {
+            subjectId = getArguments().getString(ARG_SUBJECT_ID);
+        }
     }
 
     @Override
@@ -80,16 +110,196 @@ public class SecondFragment extends Fragment {
         ContentUtils.provideAssets(activity);
 
         // Load model into the scene
-        if (getArguments() != null) {
-            String modelUri = getArguments().getString(ARG_MODEL_URI);
-            loadModel(modelUri);
-        }
+        new FetchModelFilesTask(activity).execute(subjectId);
 
         return glView;
     }
 
-    private void loadModel(String modelUri) {
-        URI uri = URI.create(modelUri);
+    private class FetchModelFilesTask extends AsyncTask<String, Void, List<String>> {
+
+        private WeakReference<Activity> weakActivity;
+
+        FetchModelFilesTask(Activity activity) {
+            this.weakActivity = new WeakReference<>(activity);
+        }
+
+        @Override
+        protected List<String> doInBackground(String... params) {
+            String subjectId = params[0];
+            List<String> filePaths = new ArrayList<>();
+            JSch jsch = new JSch();
+            Session session = null;
+            ChannelSftp channelSftp = null;
+
+            try {
+                session = jsch.getSession(SERVER_USERNAME, SERVER_HOST, SERVER_PORT);
+                session.setPassword(SERVER_PASSWORD);
+                session.setConfig("StrictHostKeyChecking", "no");
+                session.connect();
+
+                channelSftp = (ChannelSftp) session.openChannel("sftp");
+                channelSftp.connect();
+
+                String remotePath = ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectId + "/Output/3DMM";
+                channelSftp.cd(remotePath);
+
+                List<ChannelSftp.LsEntry> files = channelSftp.ls(".");
+                for (ChannelSftp.LsEntry entry : files) {
+                    if (!entry.getAttrs().isDir()) {
+                        Activity activity = weakActivity.get();
+                        if (activity != null) {
+                            String remoteFilePath = remotePath + "/" + entry.getFilename();
+                            String localFilePath = activity.getExternalFilesDir(null) + "/" + entry.getFilename();
+                            channelSftp.get(remoteFilePath, localFilePath);
+                            filePaths.add(localFilePath);
+
+                            // Check if it's an obj file and process it
+                            if (localFilePath.endsWith(".obj")) {
+                                processObjFile(localFilePath);
+                            }
+
+                            // Check if it's an mtl file and process it
+                            if (localFilePath.endsWith(".mtl")) {
+                                processMtlFile(localFilePath);
+                            }
+                        } else {
+                            Log.e("FetchModelFilesTask", "Activity is null, stopping task");
+                            return null;
+                        }
+                    }
+                }
+            } catch (JSchException | SftpException e) {
+                e.printStackTrace();
+            } finally {
+                if (channelSftp != null && channelSftp.isConnected()) {
+                    channelSftp.disconnect();
+                }
+                if (session != null && session.isConnected()) {
+                    session.disconnect();
+                }
+            }
+
+            return filePaths;
+        }
+
+        @Override
+        protected void onPostExecute(List<String> filePaths) {
+            if (filePaths != null && !filePaths.isEmpty()) {
+                for (String filePath : filePaths) {
+                    if (filePath.endsWith(".obj")) {
+                        loadModel(filePath);
+                    } else if (filePath.endsWith(".mtl")) {
+                        // load materials if needed
+                    } else if (filePath.endsWith(".jpg")) {
+                        // load textures if needed
+                    }
+                }
+            }
+        }
+
+        // Method to process and modify the .obj file
+        private void processObjFile(String filePath) {
+            try {
+                File inputFile = new File(filePath);
+                File tempFile = new File(filePath + "_processed.obj");
+
+                BufferedReader reader = new BufferedReader(new FileReader(inputFile));
+                BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile));
+
+                String line;
+                boolean addedUseMtl = false;
+
+                // Read the file line by line
+                while ((line = reader.readLine()) != null) {
+                    // Step 1: Modify the 'mtllib' line by removing './'
+                    if (line.startsWith("mtllib")) {
+                        line = line.replace("./", "");
+                    }
+
+                    // Step 2: Add 'usemtl material_0' right before the first 'f' (face) line
+                    if (!addedUseMtl && line.startsWith("f ")) {
+                        writer.write("usemtl material_0\n");
+                        addedUseMtl = true;
+                    }
+
+                    // Write the current line (modified or not) to the temp file
+                    writer.write(line + "\n");
+                }
+
+                writer.close();
+                reader.close();
+
+                // Replace the original file with the modified file
+                if (inputFile.delete()) {
+                    tempFile.renameTo(inputFile);
+                } else {
+                    Log.e("FetchModelFilesTask", "Error: Could not replace the original .obj file.");
+                }
+
+            } catch (IOException e) {
+                Log.e("FetchModelFilesTask", "Error processing obj file: " + filePath, e);
+            }
+        }
+
+        // Method to process and modify the .mtl file
+        // Method to process and modify the .mtl file
+        private void processMtlFile(String filePath) {
+            try {
+                File inputFile = new File(filePath);
+                File tempFile = new File(filePath + "_processed.mtl");
+
+                // Log the file path for debugging purposes
+                Log.d("FetchModelFilesTask", "Processing .mtl file at path: " + filePath);
+
+                BufferedReader reader = new BufferedReader(new FileReader(inputFile));
+                BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile));
+
+                String line;
+                boolean kaLineModified = false; // To track if the Ka line was modified
+
+                // Read the file line by line
+                while ((line = reader.readLine()) != null) {
+                    // Step 1: Modify the 'Ka' line if it exists
+                    if (line.startsWith("Ka")) {
+                        line = "Ka 0.300000 0.300000 0.300000";
+                        kaLineModified = true;
+                        Log.d("FetchModelFilesTask", "Modified Ka line: " + line); // Log the modified Ka line
+                    }
+
+                    // Write the current line (modified or not) to the temp file
+                    writer.write(line + "\n");
+                }
+
+                // If Ka line was not found, log it for further debugging
+                if (!kaLineModified) {
+                    Log.w("FetchModelFilesTask", "Warning: 'Ka' line not found in .mtl file: " + filePath);
+                }
+
+                writer.close();
+                reader.close();
+
+                // Replace the original file with the modified file
+                if (inputFile.delete()) {
+                    if (!tempFile.renameTo(inputFile)) {
+                        Log.e("FetchModelFilesTask", "Error: Could not rename the temporary .mtl file to original.");
+                    }
+                } else {
+                    Log.e("FetchModelFilesTask", "Error: Could not delete the original .mtl file.");
+                }
+
+            } catch (IOException e) {
+                Log.e("FetchModelFilesTask", "Error processing .mtl file: " + filePath, e);
+            }
+        }
+
+    }
+
+
+
+
+    private void loadModel(String modelFilePath) {
+        File file = new File(modelFilePath);
+        URI uri = file.toURI();
         Log.d("SecondFragment", "Model URI: " + uri.toString());
 
         new WavefrontLoaderTask(getActivity(), uri, new LoadListener() {
@@ -114,13 +324,14 @@ public class SecondFragment extends Fragment {
                 data.setColor(Constants.COLOR_WHITE);
                 data.setLocation(new float[]{0, -0.25f, 0});
                 scene.addObject(data);
-                loadMaterials(data.getMeshData());
+                loadMaterials(data.getMeshData(), subjectId);
             }
 
             @Override
             public void onLoadComplete() {}
         }).execute();
     }
+
 
     private void setupSceneEnvironment() {
         if (scene.isRotatingLight()) {
@@ -129,67 +340,142 @@ public class SecondFragment extends Fragment {
         }
     }
 
-    private void loadMaterials(MeshData meshData) {
-        // process materials
+    private void loadMaterials(MeshData meshData, String subjectId) {
         if (meshData.getMaterialFile() == null) return;
 
-        Log.i("WavefrontLoader", "--------------------------------------------------");
-        Log.i("WavefrontLoader", "Parsing materials... ");
-        Log.i("WavefrontLoader", "--------------------------------------------------");
+        Log.i("WavefrontLoader", "Parsing materials...");
+        JSch jsch = new JSch();
+        Session session = null;
+        ChannelSftp channelSftp = null;
+        InputStream mtlInputStream = null;
 
         try {
-            final InputStream inputStream = ContentUtils.getInputStream(meshData.getMaterialFile());
-            Log.d("SecondFragment", "Material file path: " + meshData.getMaterialFile());
+            // Establish SFTP session
+            session = jsch.getSession(SERVER_USERNAME, SERVER_HOST, SERVER_PORT);
+            session.setPassword(SERVER_PASSWORD);
+            session.setConfig("StrictHostKeyChecking", "no");
+            session.connect();
+
+            channelSftp = (ChannelSftp) session.openChannel("sftp");
+            channelSftp.connect();
+
+            // Path on the server where the .mtl file is located
+            String remoteMtlFilePath = ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectId + "/Output/3DMM/" + meshData.getMaterialFile();
+            Log.d("SecondFragment", "Fetching .mtl from server: " + remoteMtlFilePath);
+
+            // Fetch the .mtl file from the server as an InputStream
+            mtlInputStream = channelSftp.get(remoteMtlFilePath);
+
+            // Parse the material file
             final WavefrontMaterialsParser materialsParser = new WavefrontMaterialsParser();
-            final Materials materials = materialsParser.parse(meshData.getMaterialFile(), inputStream);
-
-            try {
-                Field materialsField = Materials.class.getDeclaredField("materials");
-                materialsField.setAccessible(true);
-                Map<String, Material> materialsMap = (Map<String, Material>) materialsField.get(materials);
-
-                for (Map.Entry<String, Material> entry : materialsMap.entrySet()) {
-                    String materialId = entry.getKey();
-                    Material material = entry.getValue();
-                    Log.i("WavefrontLoader", "Material ID: " + materialId);
-                    Log.i("WavefrontLoader", "Material: " + material.toString());
-                }
-            } catch (NoSuchFieldException | IllegalAccessException e) {
-                e.printStackTrace();
-            }
+            final Materials materials = materialsParser.parse(meshData.getMaterialFile(), mtlInputStream);
 
             if (materials.size() > 0) {
                 for (Element element : meshData.getElements()) {
                     final String elementMaterialId = element.getMaterialId();
-                    Log.i("SecondFragment", "Element Material ID: " + element.getMaterialId());
-
                     if (elementMaterialId != null && materials.contains(elementMaterialId)) {
                         final Material elementMaterial = materials.get(elementMaterialId);
                         element.setMaterial(elementMaterial);
 
                         if (elementMaterial.getTextureFile() != null) {
-                            String texturePath = "models/" + elementMaterial.getTextureFile();
-                            loadTexture(elementMaterial, texturePath);
+                            // Fetch texture directly from the server
+                            String textureFileName = elementMaterial.getTextureFile();
 
-                            // Additional texture linking for specific material file
-                            if (meshData.getMaterialFile().toString().endsWith("0003_0_hrn_mid_mesh.mtl")) {
-                                String additionalTexturePath = texturePath.replace(".jpg", "F.jpg");
-                                loadTexture(elementMaterial, additionalTexturePath);
-                            }
+                            // Pass the material, subjectId, and textureFileName to loadTextureFromServer
+                            loadTextureFromServer(elementMaterial, subjectId, textureFileName);
                         }
                     }
                 }
             }
-        } catch (IOException ex) {
-            Log.e("SecondFragment", "Error loading materials", ex);
+
+        } catch (JSchException | SftpException ex) {
+            Log.e("SecondFragment", "Error loading .mtl file from server: " + meshData.getMaterialFile(), ex);
+        } finally {
+            try {
+                if (mtlInputStream != null) mtlInputStream.close();
+            } catch (IOException e) {
+                Log.e("SecondFragment", "Error closing mtlInputStream", e);
+            }
+
+            if (channelSftp != null && channelSftp.isConnected()) {
+                channelSftp.disconnect();
+            }
+            if (session != null && session.isConnected()) {
+                session.disconnect();
+            }
         }
     }
 
+
+
+
+    private void loadTextureFromServer(Material material, String subjectId, String textureFileName) {
+        JSch jsch = new JSch();
+        Session session = null;
+        ChannelSftp channelSftp = null;
+        try {
+            session = jsch.getSession(SERVER_USERNAME, SERVER_HOST, SERVER_PORT);
+            session.setPassword(SERVER_PASSWORD);
+            session.setConfig("StrictHostKeyChecking", "no");
+            session.connect();
+
+            channelSftp = (ChannelSftp) session.openChannel("sftp");
+            channelSftp.connect();
+
+            // Path on the server where the texture is located
+            String remoteFilePath = ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectId + "/Output/3DMM/" + textureFileName;
+
+            // Fetch the file from the server as an input stream
+            InputStream textureStream = channelSftp.get(remoteFilePath);
+
+            // Decode the input stream into a Bitmap
+            Bitmap textureBitmap = BitmapFactory.decodeStream(textureStream);
+
+            if (textureBitmap == null) {
+                Log.e("SecondFragment", "Failed to decode texture bitmap from server: " + remoteFilePath);
+                return;
+            }
+
+            // Optionally, compress the bitmap into byte array format
+            ByteArrayOutputStream stream = new ByteArrayOutputStream();
+            textureBitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream);
+            byte[] textureData = stream.toByteArray();
+            material.setTextureData(textureData);
+            Log.d("SecondFragment", "Texture loaded successfully from server for material.");
+
+            textureStream.close();
+            channelSftp.disconnect();
+            session.disconnect();
+
+        } catch (JSchException | SftpException | IOException e) {
+            Log.e("SecondFragment", "Error loading texture from server: " + textureFileName, e);
+        } finally {
+            if (channelSftp != null && channelSftp.isConnected()) {
+                channelSftp.disconnect();
+            }
+            if (session != null && session.isConnected()) {
+                session.disconnect();
+            }
+        }
+    }
+
+
+
+
     private void loadTexture(Material material, String texturePath) {
         try {
-            Log.d("SecondFragment", "Loading texture: " + texturePath);
-            InputStream textureStream = getActivity().getAssets().open(texturePath);
+            Log.d("SecondFragment", "Loading texture from path: " + texturePath);
+
+            // Use FileInputStream to read the texture from external storage
+            InputStream textureStream = new FileInputStream(texturePath);
             Bitmap textureBitmap = BitmapFactory.decodeStream(textureStream);
+
+            File textureFile = new File(texturePath);
+            if (!textureFile.exists()) {
+                Log.e("SecondFragment", "Texture file does not exist: " + texturePath);
+                return;
+            }
+
 
             if (textureBitmap == null) {
                 Log.e("SecondFragment", "Failed to decode texture bitmap for texture: " + texturePath);
@@ -207,6 +493,7 @@ public class SecondFragment extends Fragment {
             Log.e("SecondFragment", "Error loading texture file: " + texturePath, ex);
         }
     }
+
 
     private void logDocumentsProvided() {
         try {

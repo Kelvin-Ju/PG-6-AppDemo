@@ -25,6 +25,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -68,6 +69,16 @@ public class ContentUtils {
         // clear documents provided by user (kitkat only)
         documentsProvided.clear();
     }
+
+    public static void writeFile(byte[] data, String path) {
+        try (FileOutputStream fos = new FileOutputStream(new File(path))) {
+            fos.write(data);
+            fos.flush();
+        } catch (IOException e) {
+            Log.e("ContentUtils", "Error writing file: " + path, e);
+        }
+    }
+
 
     public static void provideAssets(Activity activity) {
         Log.i("ContentUtils", "Registering assets... ");
@@ -127,10 +138,10 @@ public class ContentUtils {
     public static InputStream getInputStream(String path) throws IOException {
         Uri uri = getUri(path);
         if (uri == null) {
-            uri = getUri("models/"+path);
+            uri = getUri("models/" +path);
         }
         if (uri == null) {
-            uri = getUri("models/"+path.replaceAll("\\\\","/"));
+            uri = getUri("models/" +path.replaceAll("\\\\","/"));
         }
         if (uri == null && currentDir != null) {
             uri = Uri.parse("file://" + new File(currentDir, path).getAbsolutePath());

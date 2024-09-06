@@ -5,6 +5,8 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import com.google.android.material.snackbar.Snackbar;
 import androidx.appcompat.app.AppCompatActivity;
+
+import android.util.Log;
 import android.view.View;
 import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentTransaction;
@@ -19,15 +21,19 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.widget.EditText;
 import android.text.InputType;
-
+import android.widget.Toast;
 import java.net.URL;
-
+import com.jcraft.jsch.*;
 
 public class MainActivity extends AppCompatActivity {
 
     private AppBarConfiguration appBarConfiguration;
     private ActivityMainBinding binding;
     private static final int REQUEST_CAMERA_PERMISSION = 101;
+    private String serverHost;
+    private int serverPort;
+    private String serverUsername;
+    private String serverPassword;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,16 +45,19 @@ public class MainActivity extends AppCompatActivity {
 
         setSupportActionBar(binding.toolbar);
 
+        // Load configuration
+        Config config = new Config(this);
+        serverHost = config.getProperty("server_host");
+        serverPort = Integer.parseInt(config.getProperty("server_port"));
+        serverUsername = config.getProperty("server_username");
+        serverPassword = config.getProperty("server_password");
+
         // Load the first fragment at start
         if (savedInstanceState == null) {
             getSupportFragmentManager().beginTransaction()
                     .add(R.id.main_fragment_container, new FirstFragment())
                     .commit();
         }
-
-        //NavController navController = Navigation.findNavController(this, R.id.nav_host_fragment_content_main);
-        //appBarConfiguration = new AppBarConfiguration.Builder(navController.getGraph()).build();
-        //NavigationUI.setupActionBarWithNavController(this, navController, appBarConfiguration);
 
         binding.fab.setOnClickListener(view -> {
             // Check for camera permission
@@ -70,11 +79,66 @@ public class MainActivity extends AppCompatActivity {
 
         builder.setPositiveButton("OK", (dialog, which) -> {
             String subjectID = input.getText().toString();
-            openButtonFragmentWithSubjectID(subjectID);
+            checkIfSubjectIDExists(subjectID, () -> openButtonFragmentWithSubjectID(subjectID));
         });
         builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
 
         builder.show();
+    }
+
+    private void checkIfSubjectIDExists(String subjectID, Runnable onSuccess) {
+        Thread thread = new Thread(() -> {
+            JSch jsch = new JSch();
+            Session session = null;
+            ChannelSftp channelSftp = null;
+            boolean exists = false;
+            try {
+                session = jsch.getSession(serverUsername, serverHost, serverPort);
+                session.setPassword(serverPassword);
+                session.setConfig("StrictHostKeyChecking", "no");
+                session.connect();
+
+                channelSftp = (ChannelSftp) session.openChannel("sftp");
+                channelSftp.connect();
+
+                String remoteSubjectDirectory = ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectID;
+                exists = directoryExists(channelSftp, remoteSubjectDirectory);
+
+            } catch (JSchException e) {
+                Log.e("SFTP", "Failed to check if directory exists: " + e.getMessage(), e);
+            } finally {
+                if (channelSftp != null && channelSftp.isConnected()) {
+                    channelSftp.disconnect();
+                }
+                if (session != null && session.isConnected()) {
+                    session.disconnect();
+                }
+            }
+
+            boolean finalExists = exists;
+            runOnUiThread(() -> {
+                if (finalExists) {
+                    Toast.makeText(MainActivity.this, "Subject ID already exists on the server", Toast.LENGTH_LONG).show();
+                } else {
+                    onSuccess.run();
+                }
+            });
+        });
+        thread.start();
+    }
+
+    private boolean directoryExists(ChannelSftp channelSftp, String path) {
+        try {
+            SftpATTRS attrs = channelSftp.lstat(path);
+            return attrs.isDir();
+        } catch (SftpException e) {
+            if (e.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) {
+                return false;
+            } else {
+                Log.e("SFTP", "Failed to check directory existence: " + e.getMessage(), e);
+                return false;
+            }
+        }
     }
 
     private void openButtonFragmentWithSubjectID(String subjectID) {
@@ -88,7 +152,6 @@ public class MainActivity extends AppCompatActivity {
         transaction.addToBackStack(null);
         transaction.commit();
     }
-
 
     private void openSecondFragment() {
         SecondFragment secondFragment = new SecondFragment();
@@ -104,11 +167,8 @@ public class MainActivity extends AppCompatActivity {
         transaction.replace(R.id.main_fragment_container, cameraFragment); // Ensure you have a FrameLayout or similar in your activity_main.xml as the container
         transaction.addToBackStack(null);
         transaction.commit();
-
-
-
-
     }
+
     private void openButtonFragment() {
         ButtonFragment buttonFragment = new ButtonFragment();
         FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
@@ -116,7 +176,6 @@ public class MainActivity extends AppCompatActivity {
         transaction.addToBackStack(null); // Add to back stack for navigation
         transaction.commit();
     }
-
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {

@@ -9,15 +9,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix; // Add this import
 import android.graphics.Point;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
-import android.hardware.Sensor;
-import android.hardware.SensorEvent;
-import android.hardware.SensorEventListener;
-import android.hardware.SensorManager;
+
+
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -57,9 +56,19 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
+import com.jcraft.jsch.ChannelSftp;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
+import com.jcraft.jsch.SftpATTRS;
+import com.jcraft.jsch.SftpException;
+
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -72,12 +81,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Timer;
 import java.util.TimerTask;
-import android.hardware.camera2.CameraCaptureSession.CaptureCallback;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.TotalCaptureResult;
 
-
-public class CameraDiagonals extends Fragment implements SensorEventListener {
+public class CameraDiagonals extends Fragment{
 
     private TextureView cameraPreviewTextureView;
     private CameraDevice cameraDevice;
@@ -103,24 +108,15 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
     private Timer faceFrameTimer;
 
     private ImageReader imageReader;
-    private SensorManager sensorManager;
-    private Sensor gyroscopeSensor;
-    private long lastTime = 0;
-    private float totalRotationDegrees = 0;
-    private long lastTimestamp = 0;
-    private static final float NS2S = 1.0f / 1000000000.0f;
-    private float baseYPositionHorizontalLine;
+
+
     private float initialHorizontalY;
     private float initialVerticalX;
     private String subjectID; // Default ID in case none is provided
-
-
-
-
-
-
-
-
+    private static final String SERVER_HOST = ServerConfig.SERVER_HOST;
+    private static final int SERVER_PORT = ServerConfig.SERVER_PORT;
+    private static final String SERVER_USERNAME = ServerConfig.SERVER_USERNAME;
+    private static final String SERVER_PASSWORD = ServerConfig.SERVER_PASSWORD;
 
 
     @Override
@@ -153,17 +149,14 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
             if (isRecordingVideo) {
                 stopRecordingVideo();
             } else {
-                //ensureDiagonalStartPosition();
                 startRecordingVideo();
-                //animateIntoDiagonals(); // Trigger diagonal animations here
                 animateDiagonalLines();
-
             }
             toggleButton();
         });
 
         Button toggleFaceOutlineButton = view.findViewById(R.id.removeFaceOutlineButton);
-        faceFrameOverlay = view.findViewById(R.id.face_frame_overlay); // Make sure you have this line if you haven't defined faceFrameOverlay already
+        faceFrameOverlay = view.findViewById(R.id.face_frame_overlay);
 
         // Initially set to hide after 5 seconds
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
@@ -190,8 +183,7 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         horizontalLine = view.findViewById(R.id.horizontal_line);
         verticalLine = view.findViewById(R.id.vertical_line);
 
-        sensorManager = (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
-        gyroscopeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+
 
         configureLinePositions();
         switchCameraButton.setOnClickListener(v -> switchCamera());
@@ -202,9 +194,7 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
             verticalLine.setVisibility(View.VISIBLE);
         }, 5000); // Delay in milliseconds
 
-
         return view;
-
     }
 
     private final ImageReader.OnImageAvailableListener imageAvailableListener = new ImageReader.OnImageAvailableListener() {
@@ -216,116 +206,141 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
                 ByteBuffer buffer = image.getPlanes()[0].getBuffer();
                 byte[] bytes = new byte[buffer.remaining()];
                 buffer.get(bytes);
-                // Example: save bytes to file
-                saveImage(bytes);
+                saveImageToServer(bytes, System.currentTimeMillis() + "");
             } catch (Exception e) {
                 Log.e(TAG, "Error processing image", e);
             }
         }
     };
-    private void saveImage(byte[] bytes) {
-        // Get the current time for a unique file name
-        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-        String imageFileName = subjectID + "_Diagonals_";
 
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.Images.Media.DISPLAY_NAME, imageFileName);
-        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-        // Add the date the image was taken, in milliseconds since the epoch
-        values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis());
-        // Add the image to the system's MediaStore
-        values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES); // Save in the Pictures directory
+    private void saveImageToServer(byte[] bytes, String fileNameSuffix) {
+        new Thread(() -> {
+            String remoteDirPath = ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectID + "/Output/Images/";
+            String filePath = remoteDirPath + subjectID + "_" + fileNameSuffix + ".jpg";
+            JSch jsch = new JSch();
+            Session session = null;
+            ChannelSftp channelSftp = null;
+            try {
+                session = jsch.getSession(SERVER_USERNAME, SERVER_HOST, SERVER_PORT);
+                session.setPassword(SERVER_PASSWORD);
+                session.setConfig("StrictHostKeyChecking", "no");
+                session.connect();
 
-        Uri uri = null;
-        try {
-            // Get the content resolver and insert the new image
-            uri = getActivity().getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+                channelSftp = (ChannelSftp) session.openChannel("sftp");
+                channelSftp.connect();
 
-            if (uri == null) {
-                Log.e(TAG, "Failed to create new MediaStore record.");
-                return;
-            }
+                createDirectoryStructure(channelSftp, ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectID);
 
-            // Open the output stream with the Uri we just created
-            try (OutputStream outputStream = getActivity().getContentResolver().openOutputStream(uri)) {
-                outputStream.write(bytes);
-                Log.d(TAG, "Image saved to gallery: " + uri.toString());
-            } catch (IOException e) {
-                if (uri != null) {
-                    // If something goes wrong, delete the partially created entry
-                    getActivity().getContentResolver().delete(uri, null, null);
+                channelSftp.cd(remoteDirPath);
+                InputStream inputStream = new ByteArrayInputStream(bytes);
+                channelSftp.put(inputStream, filePath);
+
+                inputStream.close();
+                Log.d(TAG, "Image uploaded to server: " + filePath);
+            } catch (JSchException | SftpException | IOException e) {
+                Log.e(TAG, "Failed to upload image to server", e);
+            } finally {
+                if (channelSftp != null && channelSftp.isConnected()) {
+                    channelSftp.disconnect();
                 }
-                Log.e(TAG, "Failed to write image to gallery", e);
+                if (session != null && session.isConnected()) {
+                    session.disconnect();
+                }
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to save image to gallery", e);
+        }).start();
+    }
+
+    private void saveVideoToServer(String localFilePath, String remoteFileName) {
+        new Thread(() -> {
+            JSch jsch = new JSch();
+            Session session = null;
+            ChannelSftp channelSftp = null;
+            try {
+                File videoFile = new File(localFilePath);
+                if (!videoFile.exists()) {
+                    Log.e(TAG, "Video file does not exist at path: " + localFilePath);
+                    return;
+                }
+
+                session = jsch.getSession(SERVER_USERNAME, SERVER_HOST, SERVER_PORT);
+                session.setPassword(SERVER_PASSWORD);
+                session.setConfig("StrictHostKeyChecking", "no");
+                session.connect();
+                Log.d(TAG, "Connected to server");
+
+                channelSftp = (ChannelSftp) session.openChannel("sftp");
+                channelSftp.connect();
+                Log.d(TAG, "SFTP channel connected");
+
+                String remoteDirPath = ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectID + "/Input/Video/";
+
+                // Create the directory structure if it does not exist
+                createDirectoryStructure(channelSftp, ServerConfig.SERVER_USER_DIRECTORY + "/" + subjectID);
+
+                String remoteFilePath = remoteDirPath + remoteFileName;
+                Log.d(TAG, "Uploading video file to server path: " + remoteFilePath);
+
+                channelSftp.put(localFilePath, remoteFilePath);
+                Log.d(TAG, "Video uploaded to server: " + remoteFilePath);
+
+            } catch (JSchException | SftpException e) {
+                Log.e(TAG, "Failed to upload video to server", e);
+            } finally {
+                if (channelSftp != null && channelSftp.isConnected()) {
+                    channelSftp.disconnect();
+                    Log.d(TAG, "SFTP channel disconnected");
+                }
+                if (session != null && session.isConnected()) {
+                    session.disconnect();
+                    Log.d(TAG, "Session disconnected");
+                }
+            }
+        }).start();
+    }
+
+
+    private void createDirectoryStructure(ChannelSftp channelSftp, String baseDir) throws SftpException {
+        createDirectoryIfNotExists(channelSftp, baseDir);
+        createDirectoryIfNotExists(channelSftp, baseDir + "/Output");
+        createDirectoryIfNotExists(channelSftp, baseDir + "/Output/Tensor");
+        createDirectoryIfNotExists(channelSftp, baseDir + "/Output/3DMM");
+        createDirectoryIfNotExists(channelSftp, baseDir + "/Input");
+        createDirectoryIfNotExists(channelSftp, baseDir + "/Input/Video");
+
+
+    }
+
+    private void createDirectoryIfNotExists(ChannelSftp channelSftp, String path) throws SftpException {
+        try {
+            SftpATTRS attrs = channelSftp.stat(path);
+        } catch (SftpException e) {
+            if (e.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) {
+                channelSftp.mkdir(path);
+                Log.d(TAG, "Directory created: " + path);
+            } else {
+                throw e;
+            }
         }
     }
 
 
-    // Inside your method where you configure the visibility and positions of your views
+
     private void configureLinePositions() {
-        // Assuming horizontalLine and verticalLine are already initialized
         initialHorizontalY = horizontalLine.getTranslationY() + 150; // Store initial Y position for horizontal line
         initialVerticalX = verticalLine.getTranslationX() + 150; // Store initial X position for vertical line
         horizontalLine.setTranslationY(initialHorizontalY);
         verticalLine.setTranslationX(initialVerticalX);
     }
 
-
-
-
     private void showToast(String message) {
         getActivity().runOnUiThread(() -> Toast.makeText(getActivity(), message, Toast.LENGTH_LONG).show());
     }
-
-    // Method to start the arrow sequence
-// Method to start the arrow sequence
-// Method to start the arrow sequence
-
-
-    private float cumulativeRotation = 0; // Cumulative rotation in radians
-    private long lastUpdateTime = 0; // Last update time for calculating delta time
-
-    private final SensorEventListener gyroscopeEventListener = new SensorEventListener() {
-        @Override
-        public void onSensorChanged(SensorEvent event) {
-            if (lastUpdateTime != 0) {
-                // Calculate delta time in seconds
-                float deltaTime = (event.timestamp - lastUpdateTime) * 1e-9f;
-                // Assuming event.values[0] is the rotation rate around the X-axis in radians/second
-                float rotationRateRadiansPerSecond = event.values[0];
-                // Update cumulative rotation
-                cumulativeRotation += rotationRateRadiansPerSecond * deltaTime;
-
-                // Convert target degrees to radians
-                float targetRadians = (float)Math.toRadians(40);
-                // Check if the cumulative rotation has reached ±40 degrees in radians
-                if (Math.abs(cumulativeRotation) >= targetRadians) {
-                    // Target reached. Reset cumulative rotation for next measurement or take necessary action.
-                    cumulativeRotation = 0;
-                    // Perform action or notification
-                    Log.d("Gyro", "40 degrees movement achieved.");
-                }
-            }
-            lastUpdateTime = event.timestamp;
-        }
-
-        @Override
-        public void onAccuracyChanged(Sensor sensor, int accuracy) {
-            // Handle accuracy changes if necessary
-        }
-    };
-
-
-
-
 
 
     private void startRecordingVideo() {
         if (!hasPermissionsGranted()) {
             showToast("Waiting for permissions...");
-            return; // Exit method and wait for permissions callback
+            return;
         }
 
         if (cameraDevice == null || !cameraPreviewTextureView.isAvailable() || previewSize == null) {
@@ -333,7 +348,7 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
             return;
         }
         try {
-            closePreviewSession(); // Ensure any previous session is closed
+            closePreviewSession();
             setUpMediaRecorder();
 
             SurfaceTexture texture = cameraPreviewTextureView.getSurfaceTexture();
@@ -364,12 +379,6 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
                         mediaRecorder.start();
                         toggleButton();
                         showToast("Recording started");
-                        // Reset and show crosshairs for new recording
-                        //resetAndShowCrosshairs();
-                        //resetLinesToInitialPosition();
-                        //animateIntoDiagonals();
-                        //animateDiagonalLines();
-
                     });
                 }
 
@@ -384,100 +393,96 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         }
     }
 
-
-
-
-    private void takeScreenshotAndSave(String fileNameSuffix) {
-        View rootView = getActivity().getWindow().getDecorView().findViewById(android.R.id.content);
-        rootView.setDrawingCacheEnabled(true);
-        Bitmap bitmap = Bitmap.createBitmap(rootView.getDrawingCache());
-        rootView.setDrawingCacheEnabled(false);
-
-        saveBitmapToGallery(bitmap, "screenshot_" + fileNameSuffix);
-    }
-
-
-    private void saveBitmapToGallery(Bitmap bitmap, String fileName) {
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName);
-        values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
-        values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + File.separator + "YourAppFolder");
-
-        Uri uri = getActivity().getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
-        try (OutputStream out = getActivity().getContentResolver().openOutputStream(uri)) {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to save bitmap to gallery", e);
-        }
-    }
-
-    private void capturePhoto(final String fileNameSuffix) {
-        if (null == cameraDevice) {
-            Log.e(TAG, "cameraDevice is null");
-            return;
-        }
-
+    public void stopRecordingVideo() {
         if (!isRecordingVideo) {
-            Log.d(TAG, "Recording has stopped, skipping screenshot.");
+            return; // Early return if we're not recording
+        }
+
+        // UI thread is required for UI updates
+        getActivity().runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                // Stop recording and reset MediaRecorder for the next use
+                try {
+                    // Stop the recording
+                    mediaRecorder.stop();
+                } catch (RuntimeException stopException) {
+                    // Handle the case where stop is called immediately after start causing a RuntimeException
+                    // This may happen if there's not enough data for a video file.
+                } finally {
+                    mediaRecorder.reset(); // Reset the MediaRecorder for future use
+                    mediaRecorder.release(); // Release the MediaRecorder
+                }
+
+                isRecordingVideo = false; // Update the recording state
+                toggleButton(); // Update the button text
+                saveVideoToServer(videoFile.getAbsolutePath(), subjectID + "_Diagonal.mp4"); // Save video to server
+                startPreview(); // Assuming you have a method to restart the camera preview
+
+                if (horizontalLine != null && verticalLine != null) {
+                    horizontalLine.setVisibility(View.GONE);
+                    verticalLine.setVisibility(View.GONE);
+                }
+            }
+        });
+    }
+
+
+    private void setUpMediaRecorder() throws IOException {
+        videoFile = new File(getActivity().getExternalFilesDir(null), subjectID + "_30D.mp4");
+
+        final Activity activity = getActivity();
+        if (activity == null) {
             return;
         }
 
-        try {
-            // Setup for a still image capture
-            final CaptureRequest.Builder captureBuilder =
-                    cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            captureBuilder.addTarget(imageReader.getSurface());
+        mediaRecorder = new MediaRecorder();
+        mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+        mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
 
-            // Orientation
-            int rotation = getActivity().getWindowManager().getDefaultDisplay().getRotation();
-            captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getOrientation(rotation));
+        mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+        mediaRecorder.setOutputFile(videoFile.getAbsolutePath());
+        mediaRecorder.setVideoEncodingBitRate(10000000);
+        mediaRecorder.setVideoFrameRate(30);
+        mediaRecorder.setVideoSize(1920, 1080);
+        mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+        mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
 
-            // Listener for the capture result
-            CameraCaptureSession.CaptureCallback captureCallback =
-                    new CameraCaptureSession.CaptureCallback() {
-                        @Override
-                        public void onCaptureCompleted(@NonNull CameraCaptureSession session,
-                                                       @NonNull CaptureRequest request,
-                                                       @NonNull TotalCaptureResult result) {
-                            Log.d(TAG, "Photo captured: " + fileNameSuffix);
-                            // Process the image captured here
-                        }
-                    };
-
-            previewSession.capture(captureBuilder.build(), captureCallback, backgroundHandler);
-        } catch (CameraAccessException e) {
-            Log.e(TAG, "capturePhoto exception", e);
+        int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+        int orientationHint = 90;
+        if (isFrontCamera) {
+            switch (rotation) {
+                case Surface.ROTATION_0:
+                    orientationHint = 270;
+                    break;
+                case Surface.ROTATION_90:
+                    orientationHint = 180;
+                    break;
+                case Surface.ROTATION_180:
+                    orientationHint = 90;
+                    break;
+                case Surface.ROTATION_270:
+                    orientationHint = 0;
+                    break;
+            }
+        } else {
+            switch (rotation) {
+                case Surface.ROTATION_0:
+                    orientationHint = 90;
+                    break;
+                case Surface.ROTATION_90:
+                    orientationHint = 0;
+                    break;
+                case Surface.ROTATION_180:
+                    orientationHint = 270;
+                    break;
+                case Surface.ROTATION_270:
+                    orientationHint = 180;
+                    break;
+            }
         }
-    }
-
-
-    private int getOrientation(int rotation) {
-        // Convert rotation in degrees (Surface.ROTATION_...) into degrees (0, 90, 270, 360)
-        // This method depends on your device orientation and the camera sensor orientation
-        return 0; // Placeholder: calculate the correct orientation
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    private void adjustLineSizeAndView(View line, int targetWidth, int targetHeight) {
-        ViewGroup.LayoutParams params = line.getLayoutParams();
-        params.width = targetWidth; // For horizontal line to adjust width
-        params.height = targetHeight; // For vertical line to adjust height
-        line.setLayoutParams(params);
+        mediaRecorder.setOrientationHint(orientationHint);
+        mediaRecorder.prepare();
     }
 
     private void animateDiagonalLines() {
@@ -485,27 +490,26 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
 
         // Animate horizontal line
         horizontalLine.animate()
-                .translationY(initialHorizontalY - distanceToMove) // Move up by decreasing Y value
-                .setDuration(4000) // Duration of the animation to move up
+                .translationY(initialHorizontalY - distanceToMove)
+                .setDuration(4000)
                 .withEndAction(new Runnable() {
                     @Override
                     public void run() {
                         horizontalLine.animate()
-                                .translationY(initialHorizontalY) // Move back to original position
-                                .setDuration(4000) // Duration of the animation to move back
+                                .translationY(initialHorizontalY)
+                                .setDuration(4000)
                                 .withEndAction(new Runnable() {
                                     @Override
                                     public void run() {
-                                        // New animation: Move down by increasing Y value
                                         horizontalLine.animate()
-                                                .translationY(initialHorizontalY + distanceToMove) // Move down
-                                                .setDuration(4000) // Duration of the animation to move down
+                                                .translationY(initialHorizontalY + distanceToMove)
+                                                .setDuration(4000)
                                                 .withEndAction(new Runnable() {
                                                     @Override
                                                     public void run() {
                                                         horizontalLine.animate()
-                                                                .translationY(initialHorizontalY) // Move back to original position again
-                                                                .setDuration(4000) // Duration of the animation to move back
+                                                                .translationY(initialHorizontalY)
+                                                                .setDuration(4000)
                                                                 .withEndAction(() -> animateVerticalDiagonalLine())
                                                                 .start();
                                                     }
@@ -517,16 +521,12 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
                     }
                 })
                 .start();
-
-        // If you need to animate the vertical line in a similar manner, you can add that sequence here
     }
 
     private void animateVerticalDiagonalLine() {
         float distanceToMove = 320; // Example distance for the lines to move up and then back
         Log.d(TAG, "animateVerticalDiagonalLine: Animation started.");
 
-
-        // Start by moving up
         verticalLine.animate()
                 .translationY(initialVerticalX - distanceToMove)
                 .setDuration(4000)
@@ -535,14 +535,12 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
                     public void run() {
                         Log.d(TAG, "animateVerticalDiagonalLine: Moved up.");
 
-                        // Move back to the original position
                         verticalLine.animate()
-                                .translationY(initialVerticalX-170)
+                                .translationY(initialVerticalX - 170)
                                 .setDuration(4000)
                                 .withEndAction(new Runnable() {
                                     @Override
                                     public void run() {
-                                        // Move down
                                         Log.d(TAG, "animateVerticalDiagonalLine: Moved back to start.");
 
                                         verticalLine.animate()
@@ -551,16 +549,13 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
                                                 .withEndAction(new Runnable() {
                                                     @Override
                                                     public void run() {
-                                                        // Move back to the original position again
                                                         verticalLine.animate()
-                                                                .translationY(initialVerticalX-170)
+                                                                .translationY(initialVerticalX - 170)
                                                                 .setDuration(4000)
                                                                 .withEndAction(() -> {
-                                                                    // Use a Handler to introduce a delay
                                                                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                                                                        // This will be executed after a 2-second delay
                                                                         stopRecordingVideo();
-                                                                    }, 1000); // Delay in milliseconds (2000ms = 2s)
+                                                                    }, 1000);
                                                                 })
                                                                 .start();
                                                     }
@@ -574,97 +569,29 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
                 .start();
     }
 
-
-
-
-
-    private double calculateDiagonalLength(View view) {
-        int width = view.getWidth();
-        int height = view.getHeight();
-        return Math.sqrt(width * width + height * height);
-    }
-
-    private Point getScreenSize() {
-        // Check if the Fragment is currently attached to an activity
-        if (getActivity() != null) {
-            Display display = getActivity().getWindowManager().getDefaultDisplay();
-            Point size = new Point();
-            display.getSize(size);
-            return size;
-        } else {
-            // Return a default size or handle this case as needed
-            return new Point(0, 0); // You may want to handle this case differently
-        }
-    }
-
-
-    private double calculateScreenDiagonalLength() {
-        Point size = getScreenSize();
-        if (size.x == 0 && size.y == 0) {
-            // Handle the case where getActivity() returned null and getScreenSize() returned a default value
-            return 0; // Avoid further calculations if we don't have a valid size
-        }
-        return Math.sqrt(Math.pow(size.x, 2) + Math.pow(size.y, 2));
-    }
-
-
-
-
-
-
-
-// Make sure to call configureLinePositions() before starting this animation to ensure the lines are in the correct starting position.
-
-
-
-
-
-
-
-
-// Call this method at the end of the animation where the horizontal line returns to the center
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     private void switchCamera() {
         if (cameraDevice != null) {
             cameraDevice.close();
             cameraDevice = null;
         }
-        isFrontCamera = !isFrontCamera; // Toggle the camera flag
+        isFrontCamera = !isFrontCamera;
         if(isFrontCamera) {
-            showLinesWithDelay(); // Only schedule showing lines when switching to the front camera
+            showLinesWithDelay();
         } else {
-            hideLines(); // Immediately hide lines when switching to the back camera
+            hideLines();
         }
         openCamera();
     }
-
-
 
     private final TextureView.SurfaceTextureListener surfaceTextureListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
             configureTransform(width, height);
-            //previewSize = new Size(1920, 1080); // Adjust as needed
-
             openCamera();
         }
 
         @Override
         public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
-            // Configure your camera preview size
             configureTransform(width, height);
         }
 
@@ -678,55 +605,6 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         }
     };
 
-// Inside your CameraFragment class
-
-    // Method to show the face frame overlay
-    private void showFaceFrame() {
-        getActivity().runOnUiThread(() -> faceFrameOverlay.setVisibility(View.VISIBLE));
-
-        // Initialize the Timer
-        faceFrameTimer = new Timer();
-
-
-    }
-
-    private void initializeCameraInfo() {
-        CameraManager manager = (CameraManager) getActivity().getSystemService(Context.CAMERA_SERVICE);
-        try {
-            String cameraId = manager.getCameraIdList()[0]; // Example: Using the primary camera
-            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
-
-            // FOV calculation here based on characteristics
-            float[] focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
-            SizeF sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
-            float focalLength = focalLengths[0]; // Assuming the first available focal length
-            float fovHorizontal = (float) (2 * Math.atan(sensorSize.getWidth() / (2 * focalLength)));
-            float fovDegrees = (float) Math.toDegrees(fovHorizontal);
-            Log.d(TAG, "Camera FOV (Horizontal, in degrees): " + fovDegrees); // Log the FOV value
-
-            // DPI calculation
-            DisplayMetrics metrics = new DisplayMetrics();
-            getActivity().getWindowManager().getDefaultDisplay().getMetrics(metrics);
-            int dpi = metrics.densityDpi;
-            Log.d(TAG, "Device DPI: " + dpi); // Log the DPI value
-            // Store FOV and DPI for later use...
-
-            // Additional logic to use FOV and DPI as needed
-
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-    }
-
-
-    // Method to hide the face frame overlay
-    private void hideFaceFrame() {
-        // Still check if getActivity() is not null to be extra safe
-        if (getActivity() != null) {
-            getActivity().runOnUiThread(() -> faceFrameOverlay.setVisibility(View.INVISIBLE));
-        }
-    }
-
     private void openCamera() {
         CameraManager manager = (CameraManager) getActivity().getSystemService(Context.CAMERA_SERVICE);
         try {
@@ -736,19 +614,17 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
                 if (facing != null) {
                     if (isFrontCamera && facing == CameraCharacteristics.LENS_FACING_FRONT) {
                         currentCameraId = cameraId;
-                        // Since it's front camera, ensure face frame and lines are managed here
-                        showFaceFrame(); // Assuming you want to show this for the front camera
-                        showLinesWithDelay(); // Show lines with delay for front camera
+                        showFaceFrame();
+                        showLinesWithDelay();
                         break;
                     } else if (!isFrontCamera && facing == CameraCharacteristics.LENS_FACING_BACK) {
                         currentCameraId = cameraId;
-                        hideLines(); // Ensure lines are hidden for back camera
+                        hideLines();
                         break;
                     }
                 }
             }
             if (currentCameraId == null) {
-                // No suitable camera found, handle accordingly
                 return;
             }
 
@@ -778,10 +654,8 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
             try {
                 image = reader.acquireLatestImage();
                 if (image != null) {
-                    // Process the image here (for example, convert it to Bitmap, run face detection)
                     Log.d(TAG, "Image available!");
 
-                    // Remember to close the image once you're done with it
                     image.close();
                 }
             } catch (Exception e) {
@@ -793,19 +667,16 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         }
     };
 
-
     private void showLinesWithDelay() {
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (getActivity() == null || !isFrontCamera) return; // Don't show lines if the fragment is detached or the current camera is not the front camera.
+            if (getActivity() == null || !isFrontCamera) return;
 
             if (horizontalLine != null && verticalLine != null) {
                 horizontalLine.setVisibility(View.VISIBLE);
                 verticalLine.setVisibility(View.VISIBLE);
             }
-        }, 5000); // Delay in milliseconds
+        }, 5000);
     }
-
-
 
     private void hideLines() {
         if (horizontalLine != null && verticalLine != null) {
@@ -814,12 +685,10 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         }
     }
 
-
     private final CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(@NonNull CameraDevice camera) {
             Log.d(TAG, "Camera opened.");
-
             cameraDevice = camera;
             startPreview();
         }
@@ -882,11 +751,10 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
             e.printStackTrace();
         }
     }
+
     private void setUpCaptureRequestBuilder(CaptureRequest.Builder builder) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
     }
-
-
 
     private boolean hasPermissionsGranted() {
         if (ContextCompat.checkSelfPermission(getActivity(), Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -906,17 +774,6 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         });
     }
 
-
-
-
-    private void galleryAddVideo(File videoFile) {
-        Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-        Uri contentUri = Uri.fromFile(videoFile);
-        mediaScanIntent.setData(contentUri);
-        getActivity().sendBroadcast(mediaScanIntent);
-    }
-
-
     private void closePreviewSession() {
         if (previewSession != null) {
             previewSession.close();
@@ -924,179 +781,12 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         }
     }
 
-    private void setUpMediaRecorder() throws IOException {
-        // Create a new video file in the external files directory
-        videoFile = new File(getActivity().getExternalFilesDir(null), subjectID + "_30D.mp4");
+    private void showFaceFrame() {
+        getActivity().runOnUiThread(() -> faceFrameOverlay.setVisibility(View.VISIBLE));
 
-        final Activity activity = getActivity();
-        if (activity == null) {
-            return; // If the Fragment is not attached to an Activity, exit the method
-        }
-
-        // Configure the MediaRecorder's source for video and audio
-        mediaRecorder = new MediaRecorder();
-        mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-
-        // Set the output format and encoding parameters. These settings are for 1080p video.
-        mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        mediaRecorder.setOutputFile(videoFile.getAbsolutePath());
-        mediaRecorder.setVideoEncodingBitRate(10000000); // Bit rate
-        mediaRecorder.setVideoFrameRate(30); // Frames per second
-        // Note: You may need to adjust the video size according to your camera's capabilities
-        mediaRecorder.setVideoSize(1920, 1080); // Resolution: 1080p
-        mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264); // Video encoder
-        mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC); // Audio encoder
-
-        // Configure the MediaRecorder's orientation and start preview
-        int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
-        switch (rotation) {
-            case Surface.ROTATION_0:
-                mediaRecorder.setOrientationHint(90);
-                break;
-            case Surface.ROTATION_90:
-                mediaRecorder.setOrientationHint(0);
-                break;
-            case Surface.ROTATION_180:
-                mediaRecorder.setOrientationHint(270);
-                break;
-            case Surface.ROTATION_270:
-                mediaRecorder.setOrientationHint(180);
-                break;
-        }
-
-        int orientationHint = 90;
-        if (isFrontCamera) {
-            // Adjust these hints based on testing with your specific device and front camera
-            switch (rotation) {
-                case Surface.ROTATION_0:
-                    orientationHint = 270; // Adjust for front camera
-                    break;
-                case Surface.ROTATION_90:
-                    orientationHint = 180; // Adjust for front camera
-                    break;
-                case Surface.ROTATION_180:
-                    orientationHint = 90; // Adjust for front camera
-                    break;
-                case Surface.ROTATION_270:
-                    orientationHint = 0; // Adjust for front camera
-                    break;
-            }
-        } else {
-            // Your existing switch case for the back camera
-            switch (rotation) {
-                case Surface.ROTATION_0:
-                    orientationHint = 90;
-                    break;
-                case Surface.ROTATION_90:
-                    orientationHint = 0;
-                    break;
-                case Surface.ROTATION_180:
-                    orientationHint = 270;
-                    break;
-                case Surface.ROTATION_270:
-                    orientationHint = 180;
-                    break;
-            }
-        }
-        mediaRecorder.setOrientationHint(orientationHint);
-
-
-        // Prepare the MediaRecorder to begin capturing and encoding data
-        mediaRecorder.prepare();
+        faceFrameTimer = new Timer();
     }
 
-
-
-
-
-    public void stopRecordingVideo() {
-        if (!isRecordingVideo) {
-            return; // Early return if we're not recording
-        }
-
-        // UI thread is required for UI updates
-        getActivity().runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                // Stop recording and reset MediaRecorder for the next use
-                try {
-                    // Stop the recording
-                    mediaRecorder.stop();
-                } catch (RuntimeException stopException) {
-                    // Handle the case where stop is called immediately after start causing a RuntimeException
-                    // This may happen if there's not enough data for a video file.
-                } finally {
-                    mediaRecorder.reset(); // Reset the MediaRecorder for future use
-                    mediaRecorder.release(); // Release the MediaRecorder
-                }
-
-                isRecordingVideo = false; // Update the recording state
-                toggleButton(); // Update the button text
-                addVideoToGallery(videoFile.getAbsolutePath()); // Make the video available in the gallery
-                startPreview(); // Assuming you have a method to restart the camera preview
-
-                if (horizontalLine != null && verticalLine != null) {
-                    horizontalLine.setVisibility(View.GONE);
-                    verticalLine.setVisibility(View.GONE);
-                }
-            }
-
-        });
-    }
-
-    private void addVideoToGallery(String filePath) {
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.MediaColumns.DISPLAY_NAME, subjectID + "_" + System.currentTimeMillis());
-        values.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
-        values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/YourAppFolder");
-
-        Uri uri = getActivity().getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
-
-        try (OutputStream out = getActivity().getContentResolver().openOutputStream(uri)) {
-            Files.copy(Paths.get(filePath), out);
-            out.flush();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        // Inform the media scanner about the new video so it appears in the gallery.
-        getActivity().sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri));
-    }
-
-
-    @Override
-    public void onPause() {
-
-        if (faceFrameTimer != null) {
-            faceFrameTimer.cancel();
-            faceFrameTimer = null; // Reset the Timer reference
-        }
-
-        sensorManager.unregisterListener(this);
-
-        if (isRecordingVideo) {
-            stopRecordingVideo(); // Safely stop the recording if the user navigates away
-        }
-
-        closeCamera();
-        stopBackgroundThread();
-        super.onPause();
-        WindowManager.LayoutParams layoutParams = getActivity().getWindow().getAttributes();
-        layoutParams.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
-        getActivity().getWindow().setAttributes(layoutParams);
-    }
-
-    private void closeCamera() {
-        if (null != previewSession) {
-            previewSession.close();
-            previewSession = null;
-        }
-        if (null != cameraDevice) {
-            cameraDevice.close();
-            cameraDevice = null;
-        }
-    }
 
     private void configureTransform(int viewWidth, int viewHeight) {
         Activity activity = getActivity();
@@ -1121,19 +811,12 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         } else if (Surface.ROTATION_180 == rotation) {
             matrix.postRotate(180, centerX, centerY);
         } else {
-            // This accounts for the case where the device rotation might be 0 (normal landscape) or 180 (reverse landscape)
             float scale = Math.max((float) viewWidth / previewSize.getWidth(), (float) viewHeight / previewSize.getHeight());
             matrix.postScale(scale, scale, centerX, centerY);
         }
 
         cameraPreviewTextureView.setTransform(matrix);
     }
-
-
-
-
-
-
 
     private void startBackgroundThread() {
         backgroundThread = new HandlerThread("CameraBackground");
@@ -1154,7 +837,6 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
         }
     }
 
-
     @Override
     public void onResume() {
         super.onResume();
@@ -1165,17 +847,8 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
             activity.getWindow().setAttributes(layoutParams);
         }
         startBackgroundThread();
-        sensorManager = (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
-        gyroscopeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
-
-        if (gyroscopeSensor != null) {
-            sensorManager.registerListener(gyroscopeEventListener, gyroscopeSensor, SensorManager.SENSOR_DELAY_UI);
-        } else {
-            Toast.makeText(getContext(), "Gyroscope sensor not available", Toast.LENGTH_SHORT).show();
-        }
 
 
-        // Ensure permissions are granted
         if (hasPermissionsGranted()) {
             initializeCameraInfo();
             if (cameraPreviewTextureView.isAvailable()) {
@@ -1187,30 +860,65 @@ public class CameraDiagonals extends Fragment implements SensorEventListener {
             // Request permissions or handle the lack thereof
         }
     }
-    public void onSensorChanged(SensorEvent event) {
-        if (lastTime != 0) {
-            float dT = (event.timestamp - lastTime) * 1e-9f; // Convert from nanoseconds to seconds
-            float rotationRateY = event.values[1]; // Rotation rate around Y-axis
 
-            // Convert from radians to degrees and accumulate
-            float rotationDegrees = (float) Math.toDegrees(rotationRateY * dT);
-            totalRotationDegrees += rotationDegrees;
+    private void initializeCameraInfo() {
+        CameraManager manager = (CameraManager) getActivity().getSystemService(Context.CAMERA_SERVICE);
+        try {
+            String cameraId = manager.getCameraIdList()[0]; // Example: Using the primary camera
+            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
 
-            // Here, you'd update your crosshair's position based on totalRotationDegrees,
-            // and possibly reset totalRotationDegrees after reaching a certain threshold
+            // FOV calculation here based on characteristics
+            float[] focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+            SizeF sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+            float focalLength = focalLengths[0]; // Assuming the first available focal length
+            float fovHorizontal = (float) (2 * Math.atan(sensorSize.getWidth() / (2 * focalLength)));
+            float fovDegrees = (float) Math.toDegrees(fovHorizontal);
+            Log.d(TAG, "Camera FOV (Horizontal, in degrees): " + fovDegrees); // Log the FOV value
+
+            // DPI calculation
+            DisplayMetrics metrics = new DisplayMetrics();
+            getActivity().getWindowManager().getDefaultDisplay().getMetrics(metrics);
+            int dpi = metrics.densityDpi;
+            Log.d(TAG, "Device DPI: " + dpi); // Log the DPI value
+            // Store FOV and DPI for later use...
+
+            // Additional logic to use FOV and DPI as needed
+
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
         }
-        lastTime = event.timestamp;
     }
 
     @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {
-        // Handle sensor accuracy changes if needed
+    public void onPause() {
+        if (faceFrameTimer != null) {
+            faceFrameTimer.cancel();
+            faceFrameTimer = null;
+        }
+
+
+        if (isRecordingVideo) {
+            stopRecordingVideo();
+        }
+
+        closeCamera();
+        stopBackgroundThread();
+        super.onPause();
+        WindowManager.LayoutParams layoutParams = getActivity().getWindow().getAttributes();
+        layoutParams.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        getActivity().getWindow().setAttributes(layoutParams);
     }
 
-    // Method to move crosshair based on totalRotationDegrees
-    private void moveCrosshair() {
-        // Implement crosshair movement logic here
-        // This might involve translating totalRotationDegrees to dp or pixels and updating a view's position
+    private void closeCamera() {
+        if (null != previewSession) {
+            previewSession.close();
+            previewSession = null;
+        }
+        if (null != cameraDevice) {
+            cameraDevice.close();
+            cameraDevice = null;
+        }
     }
+
 
 }

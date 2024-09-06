@@ -1,5 +1,6 @@
 package com.example.opengles3final;
 
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -11,10 +12,22 @@ import androidx.annotation.NonNull;
 import androidx.fragment.app.Fragment;
 
 import com.example.opengles3final.databinding.FragmentFirstBinding;
+import com.jcraft.jsch.ChannelSftp;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
+import com.jcraft.jsch.SftpException;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class FirstFragment extends Fragment {
 
     private FragmentFirstBinding binding;
+    private static final String SERVER_HOST = ServerConfig.SERVER_HOST;
+    private static final int SERVER_PORT = ServerConfig.SERVER_PORT;
+    private static final String SERVER_USERNAME = ServerConfig.SERVER_USERNAME;
+    private static final String SERVER_PASSWORD = ServerConfig.SERVER_PASSWORD;
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -28,43 +41,17 @@ public class FirstFragment extends Fragment {
 
         // Assuming your FragmentFirstBinding has a ListView with the ID listview
         ListView listView = binding.listview;
-        String[] items = new String[]{"Wrinkle+Scar", "Wrinkle+Scar+NoEyeMask", "Wrinkle", "Acne", "Clear", "Model 5"};
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_list_item_1, items);
-        listView.setAdapter(adapter);
+        new FetchSubjectIDsTask().execute();
 
         // Set up the click listener for the ListView items to open the Options fragment with different models
         listView.setOnItemClickListener((parent, itemView, position, id) -> {
-            openOptionsFragment(position);
+            String selectedSubjectId = (String) parent.getItemAtPosition(position);
+            openOptionsFragment(selectedSubjectId);
         });
     }
 
-    private void openOptionsFragment(int modelIndex) {
-        String modelUri;
-        switch (modelIndex) {
-            case 0:
-                modelUri = "android://com.example.opengles3final/assets/models/003F_0_hrn_mid_mesh.obj";
-                break;
-            case 1:
-                modelUri = "android://com.example.opengles3final/assets/models/003F_0_hrn_mid_meshF.obj";
-                break;
-            case 2:
-                modelUri = "android://com.example.opengles3final/assets/models/004F_0_hrn_mid_mesh.obj";
-                break;
-            case 3:
-                modelUri = "android://com.example.opengles3final/assets/models/013_30D_F_0_hrn_mid_mesh.obj";
-                break;
-            case 4:
-                modelUri = "android://com.example.opengles3final/assets/models/007_30D_F_0_hrn_mid_mesh.obj";
-                break;
-            case 5:
-                modelUri = "android://com.example.opengles3final/assets/models/006_30D_F_0_hrn_mid_mesh.obj";
-                break;
-            default:
-                modelUri = "android://com.example.opengles3final/assets/models/default.obj";
-                break;
-        }
-
-        Options optionsFragment = Options.newInstance(modelUri);
+    private void openOptionsFragment(String subjectId) {
+        Options optionsFragment = Options.newInstance(subjectId);
 
         // Use the FragmentManager to replace the current fragment with the Options fragment
         if (getActivity() != null) {
@@ -75,9 +62,55 @@ public class FirstFragment extends Fragment {
         }
     }
 
-    @Override
-    public void onDestroyView() {
-        super.onDestroyView();
-        binding = null;
+    private class FetchSubjectIDsTask extends AsyncTask<Void, Void, List<String>> {
+        @Override
+        protected List<String> doInBackground(Void... voids) {
+            List<String> subjectIds = new ArrayList<>();
+            JSch jsch = new JSch();
+            Session session = null;
+            ChannelSftp channelSftp = null;
+
+            try {
+                session = jsch.getSession(SERVER_USERNAME, SERVER_HOST, SERVER_PORT);
+                session.setPassword(SERVER_PASSWORD);
+                session.setConfig("StrictHostKeyChecking", "no");
+                session.connect();
+
+                channelSftp = (ChannelSftp) session.openChannel("sftp");
+                channelSftp.connect();
+
+                // Navigate to the directory containing subject IDs
+                channelSftp.cd(ServerConfig.SERVER_USER_DIRECTORY);
+
+                List<ChannelSftp.LsEntry> files = channelSftp.ls(".");
+                for (ChannelSftp.LsEntry entry : files) {
+                    String fileName = entry.getFilename();
+                    if (entry.getAttrs().isDir() && !fileName.equals(".") && !fileName.equals("..") && !fileName.startsWith(".")) {
+                        subjectIds.add(fileName);
+                    }
+                }
+
+            } catch (JSchException | SftpException e) {
+                e.printStackTrace();
+            } finally {
+                if (channelSftp != null && channelSftp.isConnected()) {
+                    channelSftp.disconnect();
+                }
+                if (session != null && session.isConnected()) {
+                    session.disconnect();
+                }
+            }
+
+            return subjectIds;
+        }
+
+        @Override
+        protected void onPostExecute(List<String> subjectIds) {
+            if (getActivity() != null && !subjectIds.isEmpty()) {
+                ListView listView = binding.listview;
+                ArrayAdapter<String> adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_list_item_1, subjectIds);
+                listView.setAdapter(adapter);
+            }
+        }
     }
 }

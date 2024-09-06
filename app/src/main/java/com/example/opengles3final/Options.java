@@ -9,17 +9,17 @@ import androidx.fragment.app.Fragment;
 
 public class Options extends Fragment {
 
-    private static final String ARG_MODEL_URI = "model_uri";
-    private String modelUri;
+    private static final String ARG_SUBJECT_ID = "subject_id";
+    private String subjectId;
 
     public Options() {
         // Required empty public constructor
     }
 
-    public static Options newInstance(String modelUri) {
+    public static Options newInstance(String subjectId) {
         Options fragment = new Options();
         Bundle args = new Bundle();
-        args.putString(ARG_MODEL_URI, modelUri);
+        args.putString(ARG_SUBJECT_ID, subjectId);
         fragment.setArguments(args);
         return fragment;
     }
@@ -28,7 +28,7 @@ public class Options extends Fragment {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (getArguments() != null) {
-            modelUri = getArguments().getString(ARG_MODEL_URI);
+            subjectId = getArguments().getString(ARG_SUBJECT_ID);
         }
     }
 
@@ -54,7 +54,7 @@ public class Options extends Fragment {
         NerfFragment nerfFragment = new NerfFragment();
         // Optionally, pass arguments to the second fragment
         Bundle args = new Bundle();
-        args.putString("someKey", "someValue");
+        args.putString("subject_id", subjectId);
         nerfFragment.setArguments(args);
 
         // Use the FragmentManager to replace the current fragment with the NerfFragment
@@ -66,8 +66,9 @@ public class Options extends Fragment {
         }
     }
 
+
     private void openSecondFragment() {
-        SecondFragment secondFragment = SecondFragment.newInstance(modelUri);
+        SecondFragment secondFragment = SecondFragment.newInstance(subjectId);
 
         // Use the FragmentManager to replace the current fragment with the SecondFragment
         if (getActivity() != null) {
